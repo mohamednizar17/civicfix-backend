@@ -14,7 +14,10 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-app.use(cors());
+app.use(cors({
+  origin: 'https://civicfix-frontend-pearl.vercel.app', // replace with your actual frontend URL
+  credentials: true,
+}));
 
 // ✅ Routes
 app.use('/api/complaints', require('./routes/complaintRoutes'));
