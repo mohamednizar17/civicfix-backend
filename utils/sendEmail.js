@@ -1,10 +1,10 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
 const sendEmail = async ({ to, subject, text, html }) => {
   try {
-    // ✅ Validate email credentials are set
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.error('❌ EMAIL_USER or EMAIL_PASS not set in environment variables');
+    // ✅ Validate Resend API key
+    if (!process.env.RESEND_API_KEY) {
+      console.error('❌ RESEND_API_KEY not set in environment variables');
       return false;
     }
 
@@ -15,37 +15,39 @@ const sendEmail = async ({ to, subject, text, html }) => {
     }
 
     console.log(`📧 Preparing to send email to: ${to}`);
+    console.log(`📧 Attempting to send email to ${to}`);
 
-    // ✅ Create a transporter using Gmail SMTP
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    // ✅ Initialize Resend
+    const resend = new Resend(process.env.RESEND_API_KEY);
 
-    // ✅ Verify connection
-    await transporter.verify();
-    console.log('✅ SMTP connection verified');
-
-    // ✅ Email options
-    const mailOptions = {
-      from: `"CivicFix" <${process.env.EMAIL_USER}>`,
+    // ✅ Send email using Resend
+    const result = await resend.emails.send({
+      from: 'CivicFix <onboarding@resend.dev>', // Use Resend's default domain for free tier
       to: to.trim(),
       subject,
       text,
-      html,
-    };
+      html: html || `<p>${text}</p>`,
+    });
 
-    // ✅ Send the email
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent successfully to ${to}:`, info.response);
+    // ✅ Check if email was sent successfully
+    if (result.error) {
+      console.error('❌ Resend Error:', result.error);
+      return false;
+    }
+
+    console.log(`✅ Email sent successfully to ${to}:`, result.data.id);
     return true;
 
   } catch (error) {
     console.error('❌ Error sending email:', error.message);
-    console.error('Full error:', error);
+
+    // Provide helpful error messages
+    if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
+      console.error('⚠️ Email timeout');
+    } else if (error.message.includes('API')) {
+      console.error('❌ Resend API Error - check RESEND_API_KEY in environment');
+    }
+
     return false;
   }
 };
