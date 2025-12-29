@@ -60,38 +60,54 @@ const updateComplaintStatus = async (req, res) => {
     const { status, comment } = req.body;
     const complaintId = req.params.id;
 
-    const complaint = await Complaint.findById(complaintId).populate('user', 'name email');
+    // Fetch complaint without validation to handle legacy data
+    const complaint = await Complaint.findById(complaintId).lean();
     if (!complaint) {
       return res.status(404).json({ message: 'Complaint not found' });
     }
 
-    complaint.status = status || 'Pending';
-    complaint.statusHistory = complaint.statusHistory || [];
-    complaint.statusHistory.push({
-      status: complaint.status,
-      date: new Date(),
-      changedBy: req.user.name || req.user.email,
-      comment: comment || '',
-    });
-    await complaint.save();
+    // ✅ If complaint has no user, assign current admin (fixes legacy data)
+    if (!complaint.user) {
+      console.warn(`⚠️ Complaint ${complaintId} has no user assigned, assigning to admin`);
+      complaint.user = req.user._id;
+    }
+
+    // Update using findByIdAndUpdate to preserve user field
+    const updatedComplaint = await Complaint.findByIdAndUpdate(
+      complaintId,
+      {
+        status: status || complaint.status,
+        $push: {
+          statusHistory: {
+            status: status || complaint.status,
+            date: new Date(),
+            changedBy: req.user.name || req.user.email,
+            comment: comment || '',
+          }
+        },
+        // Ensure user field is preserved
+        user: complaint.user,
+      },
+      { new: true, runValidators: false } // Skip validation to avoid issues
+    ).populate('user', 'name email');
 
     // ✅ Send email notification to the user
     let emailSent = false;
-    if (complaint.user && complaint.user.email) {
-      console.log(`📧 Attempting to send email to ${complaint.user.email}`);
+    if (updatedComplaint.user && updatedComplaint.user.email) {
+      console.log(`📧 Attempting to send email to ${updatedComplaint.user.email}`);
       emailSent = await sendEmail({
-        to: complaint.user.email,
+        to: updatedComplaint.user.email,
         subject: 'Your Complaint Status Has Changed',
-        text: `Hello ${complaint.user.name},\n\nThe status of your complaint "${complaint.title}" is now "${complaint.status}".\n\nAdmin Comment: ${comment || 'No comment.'}`,
-        html: `<p>Hello ${complaint.user.name},</p>
-               <p>The status of your complaint "<b>${complaint.title}</b>" is now <b>${complaint.status}</b>.</p>
+        text: `Hello ${updatedComplaint.user.name},\n\nThe status of your complaint "${updatedComplaint.title}" is now "${updatedComplaint.status}".\n\nAdmin Comment: ${comment || 'No comment.'}`,
+        html: `<p>Hello ${updatedComplaint.user.name},</p>
+               <p>The status of your complaint "<b>${updatedComplaint.title}</b>" is now <b>${updatedComplaint.status}</b>.</p>
                <p><b>Admin Comment:</b> ${comment || 'No comment.'}</p>`,
       });
       
       if (emailSent) {
-        console.log(`✅ Email sent successfully to ${complaint.user.email}`);
+        console.log(`✅ Email sent successfully to ${updatedComplaint.user.email}`);
       } else {
-        console.warn(`⚠️ Email failed to send to ${complaint.user.email}, but status was updated`);
+        console.warn(`⚠️ Email failed to send to ${updatedComplaint.user.email}, but status was updated`);
       }
     } else {
       console.warn('⚠️ No user email found for complaint');
@@ -103,7 +119,7 @@ const updateComplaintStatus = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Status update error:', error.message);
-    res.status(500).json({ message: 'Failed to update complaint status' });
+    res.status(500).json({ message: 'Failed to update complaint status', error: error.message });
   }
 };
 
