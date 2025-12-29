@@ -66,10 +66,10 @@ const updateComplaintStatus = async (req, res) => {
       return res.status(404).json({ message: 'Complaint not found' });
     }
 
-    // ✅ If complaint has no user, assign current admin (fixes legacy data)
+    // ✅ If complaint has no user, warn but don't assign (avoid ObjectId cast errors)
     if (!complaint.user) {
-      console.warn(`⚠️ Complaint ${complaintId} has no user assigned, assigning to admin`);
-      complaint.user = req.user._id;
+      console.warn(`⚠️ Complaint ${complaintId} has no user assigned`);
+      // Don't assign, just proceed - email won't be sent but status will update
     }
 
     // Update using findByIdAndUpdate to preserve user field
@@ -132,7 +132,8 @@ const deleteComplaint = async (req, res) => {
       return res.status(404).json({ message: 'Complaint not found' });
     }
 
-    const isOwner = complaint.user.toString() === req.user._id.toString();
+    // ✅ Check if user or admin (handle legacy complaints without user)
+    const isOwner = complaint.user && complaint.user.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin';
 
     if (!isOwner && !isAdmin) {
