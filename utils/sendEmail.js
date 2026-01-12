@@ -1,10 +1,32 @@
 const nodemailer = require('nodemailer');
 
+// Retry logic for Render compatibility
+const sendEmailWithRetry = async (transporter, mailOptions, maxRetries = 3) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Attempt ${attempt}/${maxRetries} to send email...`);
+      const info = await transporter.sendMail(mailOptions);
+      return { success: true, messageId: info.messageId };
+    } catch (error) {
+      console.error(`❌ Attempt ${attempt} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        // Wait before retrying (exponential backoff)
+        const waitTime = Math.pow(2, attempt) * 1000;
+        console.log(`⏳ Retrying in ${waitTime / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        throw error;
+      }
+    }
+  }
+};
+
 const sendEmail = async ({ to, subject, text, html }) => {
   try {
-    // ✅ Validate Brevo SMTP credentials
-    if (!process.env.BREVO_SMTP_LOGIN || !process.env.BREVO_SMTP_PASSWORD) {
-      console.error('❌ BREVO_SMTP_LOGIN or BREVO_SMTP_PASSWORD not set in environment variables');
+    // ✅ Validate Gmail credentials
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.error('❌ EMAIL_USER or EMAIL_PASS not set in environment variables');
       return false;
     }
 
@@ -15,22 +37,23 @@ const sendEmail = async ({ to, subject, text, html }) => {
     }
 
     console.log(`📧 Preparing to send email to: ${to}`);
-    console.log(`📧 Attempting to send email to ${to}`);
 
-    // ✅ Create transporter using Brevo SMTP
+    // ✅ Create transporter using Gmail SMTP (Render-compatible configuration)
     const transporter = nodemailer.createTransport({
-      host: 'smtp-relay.brevo.com',
-      port: 587,
-      secure: false, // TLS
+      service: 'gmail',
       auth: {
-        user: process.env.BREVO_SMTP_LOGIN,
-        pass: process.env.BREVO_SMTP_PASSWORD,
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS, // Must be 16-char App Password, not regular password
       },
-      connectionTimeout: 10000,
-      socketTimeout: 10000,
+      connectionTimeout: 30000, // 30 seconds for Render
+      socketTimeout: 30000,
+      maxConnections: 1,
+      maxMessages: 5,
+      rateDelta: 1000,
+      rateLimit: 5,
     });
 
-    // ✅ Create professional HTML email template if not provided
+    // ✅ Create professional HTML email template
     const emailHtml = html || `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
@@ -49,27 +72,39 @@ const sendEmail = async ({ to, subject, text, html }) => {
       </div>
     `;
 
-    // ✅ Send email
-    const info = await transporter.sendMail({
-      from: 'CivicFix <civicfix17@gmail.com>',
+    // ✅ Email options
+    const mailOptions = {
+      from: `"CivicFix" <${process.env.EMAIL_USER}>`,
       to: to.trim(),
       subject,
       text,
       html: emailHtml,
-      replyTo: 'admin@civicfix.com',
-    });
+      replyTo: process.env.ADMIN_EMAIL || 'admin@civicfix.com',
+    };
 
-    console.log(`✅ Email sent successfully to ${to}:`, info.messageId);
+    // ✅ Send email with retry logic (Render-compatible)
+    const result = await sendEmailWithRetry(transporter, mailOptions, 3);
+
+    console.log(`✅ Email sent successfully to ${to}:`, result.messageId);
     return true;
 
   } catch (error) {
     console.error('❌ Error sending email:', error.message);
 
-    // Provide helpful error messages
+    // Provide helpful error messages for debugging
     if (error.message.includes('Invalid login')) {
-      console.error('❌ Invalid Brevo SMTP credentials - check BREVO_SMTP_LOGIN and BREVO_SMTP_PASSWORD');
-    } else if (error.message.includes('ECONNREFUSED')) {
-      console.error('❌ Cannot connect to Brevo SMTP - check network');
+      console.error('❌ Invalid Gmail credentials:');
+      console.error('   - Make sure EMAIL_USER is correct (civicfix17@gmail.com)');
+      console.error('   - EMAIL_PASS must be 16-character Google App Password');
+      console.error('   - NOT your regular Gmail password');
+      console.error('   - Get it from: https://myaccount.google.com/apppasswords');
+    } else if (error.message.includes('ETIMEDOUT') || error.message.includes('ECONNREFUSED')) {
+      console.error('⚠️ Connection timeout - this might work on retry');
+      console.error('   Check your network or Gmail account security settings');
+    } else if (error.message.includes('blocked')) {
+      console.error('❌ Gmail blocked the connection');
+      console.error('   - Enable "Less secure apps" OR');
+      console.error('   - Use 2-Step Verification + App Password');
     }
 
     return false;
